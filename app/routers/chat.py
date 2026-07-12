@@ -15,7 +15,7 @@ logger = logging.getLogger("alfred.routers.chat")
 async def chat(
     req: ChatRequest = Body(
         ...,
-        examples={
+        openapi_examples={
             "minimal": {
                 "summary": "Minimal payload",
                 "description": "Only message is required.",
