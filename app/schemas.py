@@ -11,15 +11,50 @@ Output Format section exactly:
  "memory_updates": []
 }
 """
+import re
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 
 
 # ---------------------------------------------------------------------------
 # Shared building blocks
 # ---------------------------------------------------------------------------
+
+_CURRENCY_ALIASES = {
+    "$": "USD", "US$": "USD", "USD": "USD", "DOLLAR": "USD", "DOLLARS": "USD",
+    "TK": "BDT", "TAKA": "BDT", "৳": "BDT", "BDT": "BDT",
+    "€": "EUR", "EUR": "EUR", "EURO": "EUR", "EUROS": "EUR",
+    "£": "GBP", "GBP": "GBP", "POUND": "GBP", "POUNDS": "GBP", "STERLING": "GBP",
+    "₹": "INR", "RS": "INR", "RS.": "INR", "INR": "INR", "RUPEE": "INR", "RUPEES": "INR",
+}
+
+_TOKEN_SPLIT_RE = re.compile(r"[^A-Za-z€£₹$৳]+")
+
+
+def _normalize_currency(value: Optional[str]) -> str:
+    """Accepts a currency shorthand/symbol/name — possibly messy, e.g. "tk /bdt"
+    or "euro" — and normalizes it to an ISO code; defaults to USD when nothing
+    usable was written, rather than passing an unrecognized string upstream."""
+    if value is None or not str(value).strip():
+        return "USD"
+    raw = str(value).strip().upper()
+    if raw in _CURRENCY_ALIASES:
+        return _CURRENCY_ALIASES[raw]
+
+    for token in _TOKEN_SPLIT_RE.split(raw):
+        if token in _CURRENCY_ALIASES:
+            return _CURRENCY_ALIASES[token]
+
+    if len(raw) == 3 and raw.isalpha():
+        return raw  # looks like a real ISO code we don't have an alias for (e.g. "JPY")
+
+    return "USD"
+
+
+Currency = Annotated[str, BeforeValidator(_normalize_currency)]
+
 
 class Intent(str, Enum):
     general_chat = "general_chat"
@@ -86,6 +121,13 @@ class Recommendation(BaseModel):
     source: str = "serpapi"
 
 
+class TimelineStep(BaseModel):
+    time: str
+    activity: str
+    location: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class StructuredAIResponse(BaseModel):
     """The universal response envelope used by every endpoint."""
     reply: str
@@ -103,16 +145,36 @@ class StructuredAIResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
+    session_id: Optional[str] = None
     memory: Optional[UserMemory] = None
     location: Optional[Location] = None
     calendar: Optional[List[CalendarEvent]] = None
     budget: Optional[float] = None
+    currency: Currency = "USD"
     conversation_history: Optional[List[Dict[str, str]]] = None
     subscription_status: Optional[str] = None
+    # Optional travel slots — only needed when discussing travel_planning; if
+    # omitted here, /chat will try to fill them from session memory or ask.
+    origin: Optional[str] = None
+    destination: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
 
 
 class ChatResponse(StructuredAIResponse):
-    pass
+    """Chat is the master endpoint: when a message has enough structured detail
+    (e.g. a known location), it internally calls the relevant specialist flow
+    (recommend/plan-date/gift) and folds the result in here, so the caller gets
+    one unified response instead of having to orchestrate multiple endpoints.
+
+    When session_id is used, Alfred remembers prior turns/memory server-side —
+    the backend doesn't have to resend full history every call. session_id is
+    always echoed back (generated if the caller didn't send one) so the caller
+    can persist it for the next turn."""
+    session_id: Optional[str] = None
+    timeline: List[TimelineStep] = Field(default_factory=list)
+    estimated_cost: Optional[float] = None
+    tips: List[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +192,7 @@ class RecommendRequest(BaseModel):
     category: RecommendCategory
     location: str
     budget: Optional[float] = None
+    currency: Currency = "USD"
     memory: UserMemory = Field(default_factory=UserMemory)
     preferences: Optional[str] = None
 
@@ -147,17 +210,11 @@ class RecommendResponse(BaseModel):
 class PlanDateRequest(BaseModel):
     location: str
     budget: Optional[float] = None
+    currency: Currency = "USD"
     memory: UserMemory = Field(default_factory=UserMemory)
     calendar: List[CalendarEvent] = Field(default_factory=list)
     date_type: Optional[str] = None       # e.g. "first date", "anniversary"
     preferences: Optional[str] = None
-
-
-class TimelineStep(BaseModel):
-    time: str
-    activity: str
-    location: Optional[str] = None
-    notes: Optional[str] = None
 
 
 class PlanDateResponse(BaseModel):
@@ -204,8 +261,10 @@ class CoachResponse(BaseModel):
 class GiftRequest(BaseModel):
     occasion: Optional[str] = None
     budget: Optional[float] = None
+    currency: Currency = "USD"
     memory: UserMemory = Field(default_factory=UserMemory)
     location: Optional[str] = None
+    preferences: Optional[str] = None
 
 
 class GiftResponse(BaseModel):
@@ -225,6 +284,7 @@ class TravelRequest(BaseModel):
     start_date: str
     end_date: str
     budget: Optional[float] = None
+    currency: Currency = "USD"
     memory: UserMemory = Field(default_factory=UserMemory)
     preferences: Optional[str] = None
 
@@ -237,6 +297,14 @@ class TravelResponse(BaseModel):
     estimated_cost: Optional[float] = None
     actions: List[ActionRequest] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
+
+
+# ---------------------------------------------------------------------------
+# POST /voice/speak
+# ---------------------------------------------------------------------------
+
+class SpeakRequest(BaseModel):
+    text: str
 
 
 # ---------------------------------------------------------------------------

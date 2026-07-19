@@ -25,6 +25,7 @@ async def plan_date(
                 "value": {
                     "location": "Mumbai",
                     "budget": 100,
+                    "currency": "USD",
                     "memory": {"partner_name": "Emily", "favorite_food": "Italian"},
                     "date_type": "anniversary",
                     "preferences": "quiet, outdoor seating",

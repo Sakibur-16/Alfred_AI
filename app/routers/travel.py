@@ -33,6 +33,7 @@ async def travel(
                     "start_date": "2026-08-01",
                     "end_date": "2026-08-05",
                     "budget": 500,
+                    "currency": "USD",
                     "memory": {"partner_name": "Emily"},
                     "preferences": "budget-friendly, direct flights",
                 },

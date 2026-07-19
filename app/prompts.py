@@ -10,13 +10,17 @@ from typing import List, Optional
 from app.schemas import CalendarEvent, Location, UserMemory
 
 ALFRED_PERSONA = """\
-You are Alfred, a premium AI dating concierge and relationship coach — think of \
-yourself as a highly capable executive assistant who happens to specialize in dating, \
-relationships, and thoughtful gestures. You are:
+You are Alfred, a premium AI dating concierge and relationship coach — modeled on the \
+butler archetype: Bruce Wayne's Alfred Pennyworth. You have decades of imagined experience, \
+unshakeable composure, and quiet devotion to the user's wellbeing. You are:
 
-- Professional, warm, and emotionally intelligent
-- Respectful of the user's relationship and privacy at all times
-- Concise: you explain your reasoning briefly, you don't ramble
+- Distinguished and dry-witted: understated British-butler phrasing, gentle irony, never gushing
+- Unflappable: nothing rattles you, whether the request is trivial or the user is anxious
+- Plainly honest: you tell the user what they need to hear, delivered with tact and restraint
+- Quietly protective: you look out for the user's (and their partner's) dignity and best interest
+- Concise: a butler doesn't ramble; you explain your reasoning briefly and get to the point
+- Formal but warm: comfortable saying things like "if I may suggest" or "very good, sir/madam" \
+  sparingly — enough to feel like Alfred, never a caricature or over-the-top on every line
 - Never gimmicky, never "swipe app" energy — you are a concierge, not a matchmaker app
 
 You NEVER:
@@ -55,13 +59,60 @@ def format_location_block(location: Optional[Location]) -> str:
     return f"User location: {', '.join(parts)}"
 
 
+AIRPORT_CODE_PROMPT = """\
+Give the IATA 3-letter code for the primary international airport serving this \
+city or place: "{place}"
+
+Respond ONLY with this JSON shape, no other text:
+{{"code": "<3-letter uppercase IATA code, or null if you are not confident>"}}
+"""
+
+
 INTENT_CLASSIFIER_PROMPT = """\
 Classify the user's message into exactly one of these intents:
 general_chat, restaurant_search, activity_planning, date_planning, budget_planning,
 travel_planning, gift_suggestions, coaching, calendar_assistance, anniversary_planning,
 reminder_requests, small_talk
 
-Respond ONLY with JSON: {{"intent": "<one_of_the_above>", "confidence": <0.0-1.0>}}
+If the new message is a short/bare answer to a question Alfred just asked (e.g. Alfred \
+asked "what's your budget?" and the user just replies "$50" or "around 50 dollars"), \
+classify it under the SAME intent as that earlier question/topic, not as general_chat — \
+the user is continuing that request, not starting a new unrelated one.
+
+Also extract these slots if mentioned in the new message OR anywhere earlier in the \
+conversation (a value mentioned two turns ago still counts — carry it forward). Never \
+guess or invent a value that was never actually stated; use null instead.
+
+- location_city: city/place being discussed
+- travel_origin: departure city, only relevant if intent is travel_planning
+- travel_destination: destination city, only relevant if intent is travel_planning
+- travel_start_date: trip start date exactly as the user phrased it (do not reformat \
+  or invent a date), only relevant if intent is travel_planning
+- travel_end_date: trip end date exactly as the user phrased it, only relevant if \
+  intent is travel_planning
+- coach_topic: only if intent is coaching, one of exactly: first_date, second_date, \
+  texting_advice, relationship_advice, conversation_starters — pick the closest match, \
+  default to relationship_advice if unclear
+- budget_amount: a plain number (no currency symbol/word) if the user stated a budget/price \
+  limit anywhere in the conversation, e.g. "$50", "around 50 dollars", "৳2000 budget" all \
+  become 50, 50, 2000. Null if no numeric budget was ever stated.
+- budget_no_limit: true if the user explicitly said budget doesn't matter / isn't a concern / \
+  "any budget is fine" / similar — this counts as the budget question being answered even \
+  though no number was given. false otherwise.
+
+Respond ONLY with this JSON shape:
+{{
+  "intent": "<one_of_the_above>",
+  "confidence": <0.0-1.0>,
+  "location_city": "<city name or null>",
+  "travel_origin": "<city or null>",
+  "travel_destination": "<city or null>",
+  "travel_start_date": "<date as stated or null>",
+  "travel_end_date": "<date as stated or null>",
+  "budget_amount": <number or null>,
+  "budget_no_limit": <true or false>,
+  "coach_topic": "<topic or null>"
+}}
 
 Message: "{message}"
 Recent conversation (may be empty):
@@ -117,6 +168,10 @@ Here are raw search results (already fetched by the backend via SerpAPI — do n
 remove, or invent entries, only rank and explain):
 {search_results}
 
+Recent conversation (may be empty — use it to stay consistent with anything already \
+discussed, e.g. a follow-up question you asked that this request is answering):
+{history}
+
 For each result you keep, add a short "reason" (one sentence, personalized using memory \
 when relevant, e.g. referencing budget or favorite food). Drop results that clearly don't \
 fit the budget or category. Return the top 5 at most, ordered best-first.
@@ -166,6 +221,10 @@ Restaurant options (from search, do not invent others):
 
 Activity options (from search, do not invent others):
 {activity_results}
+
+Recent conversation (may be empty — use it to stay consistent with anything already \
+discussed, e.g. a follow-up question you asked that this request is answering):
+{history}
 
 Build one complete date plan: a short timeline (3-6 steps with rough times), the single \
 best restaurant pick, the single best activity pick, an estimated total cost that respects \
@@ -222,6 +281,10 @@ Location: {location}
 
 Gift search results (from search, do not invent others, may be empty):
 {search_results}
+
+Recent conversation (may be empty — use it to stay consistent with anything already \
+discussed, e.g. a follow-up question you asked that this request is answering):
+{history}
 
 Suggest gifts that fit the partner's known preferences and the budget. If search results \
 exist, rank and explain them the same way as recommendations. If none exist, suggest general \

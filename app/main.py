@@ -1,6 +1,7 @@
 import logging
 import socket
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request, status
@@ -12,24 +13,35 @@ if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.config import get_settings
+from app.http_client import aclose_http_client
 from app.llm_client import LLMError
 from app.logging_config import configure_logging
-from app.routers import chat, coach, gift, health, plan_date, recommend, travel
+from app.routers import chat, coach, gift, health, plan_date, recommend, travel, voice
 from app.schemas import ErrorResponse
 from app.search_client import SearchError
+from app.voice_client import VoiceError
 
 settings = get_settings()
 configure_logging(settings)
 logger = logging.getLogger("alfred.main")
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    await aclose_http_client()
+
+
 app = FastAPI(
     title=settings.app_name,
     description=(
         "Alfred's AI service layer: conversational concierge, date planning, "
-        "recommendations, coaching, gifts, and travel. Stateless — every request "
-        "carries its own memory/context from the backend."
+        "recommendations, coaching, gifts, and travel. /chat optionally holds "
+        "short-lived, in-memory session state keyed by session_id; every other "
+        "endpoint remains stateless and relies on the caller's own context."
     ),
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -47,6 +59,7 @@ app.include_router(plan_date.router)
 app.include_router(coach.router)
 app.include_router(gift.router)
 app.include_router(travel.router)
+app.include_router(voice.router)
 
 
 @app.exception_handler(LLMError)
@@ -68,6 +81,15 @@ async def search_error_handler(request: Request, exc: SearchError) -> JSONRespon
             detail=str(exc),
             follow_up_question="Live search isn't available right now — want general advice instead?",
         ).model_dump(),
+    )
+
+
+@app.exception_handler(VoiceError)
+async def voice_error_handler(request: Request, exc: VoiceError) -> JSONResponse:
+    logger.error("Unhandled VoiceError on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        content=ErrorResponse(error="voice_provider_unavailable", detail=str(exc)).model_dump(),
     )
 
 

@@ -26,6 +26,7 @@ async def recommend(
                     "category": "restaurant",
                     "location": "Mumbai",
                     "budget": 80,
+                    "currency": "USD",
                     "memory": {"favorite_food": "Italian"},
                     "preferences": "quiet, outdoor seating",
                 },

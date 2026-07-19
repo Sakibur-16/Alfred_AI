@@ -53,7 +53,7 @@ class AnthropicClient(BaseLLMClient):
         self._max_tokens = settings.llm_max_tokens
         self._temperature = settings.llm_temperature
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     async def complete(self, system_prompt: str, user_prompt: str) -> str:
         try:
             response = await self._client.messages.create(
@@ -81,7 +81,7 @@ class OpenAIClient(BaseLLMClient):
         self._max_tokens = settings.llm_max_tokens
         self._temperature = settings.llm_temperature
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     async def complete(self, system_prompt: str, user_prompt: str) -> str:
         try:
             response = await self._client.chat.completions.create(
