@@ -59,6 +59,16 @@ def format_location_block(location: Optional[Location]) -> str:
     return f"User location: {', '.join(parts)}"
 
 
+DETAILS_INSTRUCTION = """\
+For each recommendation, always copy "image_url" through unchanged from the matching search \
+result (null if that result had none — never invent an image URL). You may also add up to 3 \
+short "details" items (each a {{"label": "", "description": ""}} pair, e.g. label "Ambiance" \
+or "Best For") as brief atmosphere/talking-point framing inferred from the result's real \
+rating/price/category/name — these are your own descriptive impressions, NOT claimed facts. \
+Never invent a specific unverifiable fact like a chef's name, an award, or a menu item that \
+wasn't in the search data."""
+
+
 AIRPORT_CODE_PROMPT = """\
 Give the IATA 3-letter code for the primary international airport serving this \
 city or place: "{place}"
@@ -70,9 +80,18 @@ Respond ONLY with this JSON shape, no other text:
 
 INTENT_CLASSIFIER_PROMPT = """\
 Classify the user's message into exactly one of these intents:
-general_chat, restaurant_search, activity_planning, date_planning, budget_planning,
-travel_planning, gift_suggestions, coaching, calendar_assistance, anniversary_planning,
-reminder_requests, small_talk
+general_chat, restaurant_search, activity_planning, event_search, hotel_search, date_planning, \
+budget_planning, travel_planning, gift_suggestions, coaching, calendar_assistance, \
+anniversary_planning, reminder_requests, small_talk
+
+Use event_search specifically for dated/scheduled happenings (concerts, festivals, shows, \
+exhibitions, sports matches) — anything with a specific date/time the user wants to attend. \
+Use activity_planning for undated things to do (a museum, a hike, a park) that aren't tied \
+to a specific scheduled occurrence.
+
+Use hotel_search when the user only wants a place to stay in a city, with no flight/trip \
+involved (e.g. "find me a hotel in Goa"). Use travel_planning instead when they're planning \
+a full trip that also involves getting there (flights, an origin city, specific travel dates).
 
 If the new message is a short/bare answer to a question Alfred just asked (e.g. Alfred \
 asked "what's your budget?" and the user just replies "$50" or "around 50 dollars"), \
@@ -176,11 +195,14 @@ For each result you keep, add a short "reason" (one sentence, personalized using
 when relevant, e.g. referencing budget or favorite food). Drop results that clearly don't \
 fit the budget or category. Return the top 5 at most, ordered best-first.
 
+{details_instruction}
+
 Respond ONLY with this JSON shape:
 {{
   "reply": "<one short sentence summarizing the picks>",
   "recommendations": [
-    {{"name": "", "category": "", "rating": null, "price_level": "", "address": "", "url": "", "reason": ""}}
+    {{"name": "", "category": "", "rating": null, "price_level": "", "address": "", "url": "", \
+"image_url": null, "reason": "", "details": [{{"label": "", "description": ""}}]}}
   ],
   "confidence": <0.0-1.0>
 }}
@@ -231,16 +253,55 @@ best restaurant pick, the single best activity pick, an estimated total cost tha
 the budget, and brief travel notes (e.g. how to get between the two, if relevant). \
 Personalize with memory where natural.
 
+{details_instruction}
+
 Respond ONLY with this JSON shape:
 {{
   "reply": "<one short intro sentence>",
   "timeline": [{{"time": "", "activity": "", "location": "", "notes": ""}}],
-  "restaurant": {{"name": "", "category": "restaurant", "rating": null, "price_level": "", "address": "", "url": "", "reason": ""}},
-  "activity": {{"name": "", "category": "activity", "rating": null, "price_level": "", "address": "", "url": "", "reason": ""}},
+  "restaurant": {{"name": "", "category": "restaurant", "rating": null, "price_level": "", "address": "", "url": "", \
+"image_url": null, "reason": "", "details": [{{"label": "", "description": ""}}]}},
+  "activity": {{"name": "", "category": "activity", "rating": null, "price_level": "", "address": "", "url": "", \
+"image_url": null, "reason": "", "details": [{{"label": "", "description": ""}}]}},
   "estimated_cost": <number or null>,
   "travel_notes": "",
   "actions": [{{"action": "", "payload": {{}}}}],
   "memory_updates": [{{"key": "", "value": ""}}],
+  "confidence": <0.0-1.0>
+}}
+"""
+
+
+PLAN_DATE_OPTIONS_PROMPT = """\
+{persona}
+
+{memory_block}
+{calendar_block}
+Budget: {budget}
+Location: {location}
+Date type: {date_type}
+Preferences: {preferences}
+
+Restaurant options (from search, do not invent others):
+{restaurant_results}
+
+Activity options (from search, do not invent others):
+{activity_results}
+
+Propose {num_options} DIFFERENT date ideas as a browsable list (not one built-out plan) — \
+each a distinct concept (e.g. one relaxed/outdoorsy, one dining-focused, one adventurous), \
+so the user can pick which to develop further. Each idea's "name" should be a short concept \
+title (e.g. "Coffee & Nature Walk"), not a venue name. Ground each in the real search \
+results provided — do not invent specific venues, but you may describe an idea in general \
+terms (e.g. "a scenic walk followed by coffee") even without a specific matching venue.
+
+Respond ONLY with this JSON shape:
+{{
+  "reply": "<one short intro sentence>",
+  "options": [
+    {{"name": "<short concept title>", "description": "<one sentence>", "image_url": null, \
+"estimated_cost": <number or null>, "date_type": "<e.g. relaxed, dining, adventurous>"}}
+  ],
   "confidence": <0.0-1.0>
 }}
 """
@@ -290,10 +351,13 @@ Suggest gifts that fit the partner's known preferences and the budget. If search
 exist, rank and explain them the same way as recommendations. If none exist, suggest general \
 gift *categories/ideas* (not specific unverified products) and say live results weren't found.
 
+{details_instruction}
+
 Respond ONLY with this JSON shape:
 {{
   "reply": "<short summary sentence>",
-  "recommendations": [{{"name": "", "category": "gift", "rating": null, "price_level": "", "address": "", "url": "", "reason": ""}}],
+  "recommendations": [{{"name": "", "category": "gift", "rating": null, "price_level": "", "address": "", "url": "", \
+"image_url": null, "reason": "", "details": [{{"label": "", "description": ""}}]}}],
   "confidence": <0.0-1.0>,
   "memory_updates": [{{"key": "", "value": ""}}]
 }}
@@ -323,12 +387,17 @@ Put together a long-distance date/trip plan: pick the best flight(s) and hotel w
 budget, suggest a few activities, and give a total estimated cost. Be honest if the \
 budget doesn't comfortably cover what's available.
 
+{details_instruction}
+
 Respond ONLY with this JSON shape:
 {{
   "reply": "<short intro sentence>",
-  "flights": [{{"name": "", "category": "flight", "rating": null, "price_level": "", "address": "", "url": "", "reason": ""}}],
-  "hotels": [{{"name": "", "category": "hotel", "rating": null, "price_level": "", "address": "", "url": "", "reason": ""}}],
-  "activities": [{{"name": "", "category": "activity", "rating": null, "price_level": "", "address": "", "url": "", "reason": ""}}],
+  "flights": [{{"name": "", "category": "flight", "rating": null, "price_level": "", "address": "", "url": "", \
+"image_url": null, "reason": "", "details": [{{"label": "", "description": ""}}]}}],
+  "hotels": [{{"name": "", "category": "hotel", "rating": null, "price_level": "", "address": "", "url": "", \
+"image_url": null, "reason": "", "details": [{{"label": "", "description": ""}}]}}],
+  "activities": [{{"name": "", "category": "activity", "rating": null, "price_level": "", "address": "", "url": "", \
+"image_url": null, "reason": "", "details": [{{"label": "", "description": ""}}]}}],
   "estimated_cost": <number or null>,
   "actions": [{{"action": "", "payload": {{}}}}],
   "confidence": <0.0-1.0>

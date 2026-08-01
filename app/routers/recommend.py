@@ -31,6 +31,17 @@ async def recommend(
                     "preferences": "quiet, outdoor seating",
                 },
             },
+            "events": {
+                "summary": "Events tab (concerts, festivals, shows)",
+                "description": "category=event searches real dated events via Google Events (distinct "
+                "from category=activity, which is static venues with no date). preferences can narrow "
+                "the type of event, e.g. \"live music\", \"comedy\", \"art exhibition\".",
+                "value": {
+                    "category": "event",
+                    "location": "Mumbai",
+                    "preferences": "live music",
+                },
+            },
         },
     )
 ) -> RecommendResponse:

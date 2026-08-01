@@ -31,6 +31,19 @@ async def plan_date(
                     "preferences": "quiet, outdoor seating",
                 },
             },
+            "browse_options": {
+                "summary": "Browse multiple date ideas",
+                "description": "Set num_options > 1 to get back a browsable list of distinct date "
+                "concepts (PlanDateResponse.options) instead of one fully-built plan — matches a "
+                "'pick from a few ideas' screen. Once the user picks one, re-call with num_options=1 "
+                "(and that idea's date_type/preferences) to get its full timeline.",
+                "value": {
+                    "location": "Mumbai",
+                    "budget": 100,
+                    "currency": "USD",
+                    "num_options": 3,
+                },
+            },
         },
     )
 ) -> PlanDateResponse:

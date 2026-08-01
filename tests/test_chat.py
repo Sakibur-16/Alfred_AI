@@ -146,6 +146,69 @@ def test_chat_remembers_prior_turns_across_calls_via_session_id(client, auth_hea
     assert "which city shall I search near" in intent_prompt_turn2
 
 
+def test_chat_routes_event_search_to_recommend_without_requiring_budget(client, auth_headers, fake_llm, fake_search):
+    # No budget given anywhere — events must NOT be gated on budget the way
+    # restaurant/activity/gift are, since "what's on this weekend" shouldn't
+    # require answering a budget question first.
+    fake_search._events = [{"name": "Jazz Night", "price_level": "Fri, Aug 1, 8PM", "address": "Blue Room, Mumbai"}]
+    fake_llm.queue({"intent": "event_search", "confidence": 0.9, "location_city": "Mumbai"})
+    fake_llm.queue({
+        "reply": "Jazz Night looks like a great pick this weekend.",
+        "recommendations": [{"name": "Jazz Night", "reason": "Live music, well-reviewed venue."}],
+        "confidence": 0.85,
+    })
+
+    resp = client.post(
+        "/chat",
+        json={"message": "any concerts happening in Mumbai this weekend?"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "event_search"
+    assert body["recommendations"], "expected a real event search, not a follow-up question"
+    assert body["recommendations"][0]["name"] == "Jazz Night"
+
+
+def test_chat_hotel_search_asks_for_budget_when_unknown(client, auth_headers, fake_llm):
+    # Unlike events, hotels ARE budget-gated (price is a real filtering
+    # criterion for lodging) — must ask rather than search unfiltered.
+    fake_llm.queue({"intent": "hotel_search", "confidence": 0.85, "location_city": "Goa"})
+    fake_llm.queue({"reply": "What budget did you have in mind for the stay?", "confidence": 0.7})
+
+    resp = client.post(
+        "/chat",
+        json={"message": "find me a hotel in Goa"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "hotel_search"
+    assert body["recommendations"] == []
+    assert "budget" in body["reply"].lower()
+
+
+def test_chat_routes_hotel_search_to_recommend_when_budget_known(client, auth_headers, fake_llm, fake_search):
+    fake_search._places = [{"name": "Seaside Resort Goa", "rating": 4.5, "price_level": "$80/night"}]
+    fake_llm.queue({"intent": "hotel_search", "confidence": 0.9, "location_city": "Goa", "budget_amount": 100})
+    fake_llm.queue({
+        "reply": "Seaside Resort Goa is a lovely option within budget.",
+        "recommendations": [{"name": "Seaside Resort Goa", "rating": 4.5, "reason": "Great value near the beach."}],
+        "confidence": 0.85,
+    })
+
+    resp = client.post(
+        "/chat",
+        json={"message": "find me a hotel in Goa, budget $100 a night"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "hotel_search"
+    assert body["recommendations"], "expected a real hotel search once budget was known"
+    assert body["recommendations"][0]["name"] == "Seaside Resort Goa"
+
+
 def test_chat_remembers_city_and_routes_to_recommend_on_bare_followup(client, auth_headers, fake_llm, fake_search):
     # Turn 1: user mentions a city — intent classifier extracts it as location_city
     # even though no structured `location` field is sent in the request.

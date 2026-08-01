@@ -60,6 +60,8 @@ class Intent(str, Enum):
     general_chat = "general_chat"
     restaurant_search = "restaurant_search"
     activity_planning = "activity_planning"
+    event_search = "event_search"
+    hotel_search = "hotel_search"
     date_planning = "date_planning"
     budget_planning = "budget_planning"
     travel_planning = "travel_planning"
@@ -110,6 +112,15 @@ class MemoryUpdate(BaseModel):
     value: Any
 
 
+class DetailItem(BaseModel):
+    """A short, descriptive talking-point for a venue's detail page (e.g.
+    "Ambiance", "Best For") — generated framing/atmosphere text based on real
+    search-result signals (rating, price, category), never a claimed fact like
+    a chef's name or an award that wasn't actually in the search data."""
+    label: str
+    description: str
+
+
 class Recommendation(BaseModel):
     name: str
     category: Optional[str] = None
@@ -117,7 +128,9 @@ class Recommendation(BaseModel):
     price_level: Optional[str] = None
     address: Optional[str] = None
     url: Optional[str] = None
+    image_url: Optional[str] = None
     reason: Optional[str] = None
+    details: List[DetailItem] = Field(default_factory=list)
     source: str = "serpapi"
 
 
@@ -126,6 +139,16 @@ class TimelineStep(BaseModel):
     activity: str
     location: Optional[str] = None
     notes: Optional[str] = None
+
+
+class PlanOption(BaseModel):
+    """One browsable date-idea card (Figma: 'Recommended Date Ideas' list) —
+    a lightweight summary shown before the user picks one to see full details."""
+    name: str
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    estimated_cost: Optional[float] = None
+    date_type: Optional[str] = None
 
 
 class StructuredAIResponse(BaseModel):
@@ -184,6 +207,7 @@ class ChatResponse(StructuredAIResponse):
 class RecommendCategory(str, Enum):
     restaurant = "restaurant"
     activity = "activity"
+    event = "event"
     gift = "gift"
     hotel = "hotel"
 
@@ -215,17 +239,25 @@ class PlanDateRequest(BaseModel):
     calendar: List[CalendarEvent] = Field(default_factory=list)
     date_type: Optional[str] = None       # e.g. "first date", "anniversary"
     preferences: Optional[str] = None
+    # When > 1, returns that many browsable candidate plans (PlanDateResponse.options)
+    # instead of one fully-built plan — matches the Figma "Recommended Date Ideas"
+    # browsing list. Callers then re-call with a specific date_type/preferences
+    # derived from the chosen option to get its full timeline.
+    num_options: int = 1
 
 
 class PlanDateResponse(BaseModel):
     reply: str
-    timeline: List[TimelineStep]
+    timeline: List[TimelineStep] = Field(default_factory=list)
     restaurant: Optional[Recommendation] = None
     activity: Optional[Recommendation] = None
     estimated_cost: Optional[float] = None
     travel_notes: Optional[str] = None
     actions: List[ActionRequest] = Field(default_factory=list)
     memory_updates: List[MemoryUpdate] = Field(default_factory=list)
+    # Populated instead of timeline/restaurant/activity when num_options > 1 —
+    # a browsable list of candidate plans (Figma: "Recommended Date Ideas").
+    options: List[PlanOption] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
 
 

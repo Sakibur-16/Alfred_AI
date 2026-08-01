@@ -17,8 +17,10 @@ from app.prompts import (
     ALFRED_PERSONA,
     CHAT_RESPONSE_PROMPT,
     COACH_PROMPT,
+    DETAILS_INSTRUCTION,
     GIFT_PROMPT,
     NO_SEARCH_RESULTS_PROMPT,
+    PLAN_DATE_OPTIONS_PROMPT,
     PLAN_DATE_PROMPT,
     RANK_RECOMMENDATIONS_PROMPT,
     TRAVEL_PROMPT,
@@ -38,6 +40,7 @@ from app.schemas import (
     Intent,
     PlanDateRequest,
     PlanDateResponse,
+    PlanOption,
     Recommendation,
     RecommendCategory,
     RecommendRequest,
@@ -168,6 +171,33 @@ async def handle_chat(
         category = RecommendCategory.restaurant if intent == Intent.restaurant_search else RecommendCategory.activity
         sub_req = RecommendRequest(
             category=category, location=location.city, budget=budget, currency=req.currency,
+            memory=memory, preferences=req.message,
+        )
+        rec = await handle_recommend(sub_req, llm, search, history=history)
+        return _finalize_chat(
+            req, sessions, session_id, memory,
+            reply=rec.reply, intent=intent, confidence=rec.confidence,
+            recommendations=rec.recommendations,
+        )
+
+    if intent == Intent.event_search and location.city:
+        # Unlike restaurants/gifts, events aren't typically budget-filtered —
+        # asking "what's your budget" before showing "what's on this weekend"
+        # is awkward, so this searches as soon as a city is known.
+        sub_req = RecommendRequest(
+            category=RecommendCategory.event, location=location.city, budget=budget, currency=req.currency,
+            memory=memory, preferences=req.message,
+        )
+        rec = await handle_recommend(sub_req, llm, search, history=history)
+        return _finalize_chat(
+            req, sessions, session_id, memory,
+            reply=rec.reply, intent=intent, confidence=rec.confidence,
+            recommendations=rec.recommendations,
+        )
+
+    if intent == Intent.hotel_search and location.city and have_budget:
+        sub_req = RecommendRequest(
+            category=RecommendCategory.hotel, location=location.city, budget=budget, currency=req.currency,
             memory=memory, preferences=req.message,
         )
         rec = await handle_recommend(sub_req, llm, search, history=history)
@@ -333,6 +363,11 @@ async def handle_recommend(
 
     if category == "hotel":
         raw_results = await search.search_places(f"hotels in {req.location}", req.location, currency=req.currency)
+    elif category == "event":
+        try:
+            raw_results = await search.search_events(req.preferences or "local", req.location, currency=req.currency)
+        except SearchError:
+            raw_results = []
     else:
         raw_results = await _fetch_place_results(search, category, req.location, req.preferences, req.currency)
 
@@ -359,6 +394,7 @@ async def handle_recommend(
         preferences=req.preferences or "none stated",
         search_results=raw_results,
         history=_history_text(history or []),
+        details_instruction=DETAILS_INSTRUCTION,
     )
     try:
         data = await llm.complete_json(ALFRED_PERSONA, prompt)
@@ -385,6 +421,9 @@ async def handle_plan_date(
         _fetch_place_results(search, "activity", req.location, req.preferences, req.currency),
     )
 
+    if req.num_options > 1:
+        return await _handle_plan_date_options(req, llm, restaurants, activities, history)
+
     prompt = PLAN_DATE_PROMPT.format(
         persona=ALFRED_PERSONA,
         memory_block=format_memory_block(req.memory),
@@ -396,6 +435,7 @@ async def handle_plan_date(
         restaurant_results=restaurants or "none available",
         activity_results=activities or "none available",
         history=_history_text(history or []),
+        details_instruction=DETAILS_INSTRUCTION,
     )
 
     try:
@@ -423,6 +463,44 @@ async def handle_plan_date(
         travel_notes=data.get("travel_notes"),
         actions=actions,
         memory_updates=memory_updates,
+        confidence=float(data.get("confidence", 0.6)),
+    )
+
+
+async def _handle_plan_date_options(
+    req: PlanDateRequest, llm: BaseLLMClient,
+    restaurants: List[Dict[str, Any]], activities: List[Dict[str, Any]],
+    history: Optional[List[Dict[str, str]]],
+) -> PlanDateResponse:
+    """Figma's 'Recommended Date Ideas' browsing list: several distinct,
+    lightweight date concepts instead of one fully-built plan. The caller picks
+    one and re-calls with num_options=1 (+ the chosen concept as date_type or
+    preferences) to get its full timeline via the normal single-plan path."""
+    prompt = PLAN_DATE_OPTIONS_PROMPT.format(
+        persona=ALFRED_PERSONA,
+        memory_block=format_memory_block(req.memory),
+        calendar_block=format_calendar_block(req.calendar),
+        budget=_budget_text(req.budget, req.currency),
+        location=req.location,
+        date_type=req.date_type or "date",
+        preferences=req.preferences or "none stated",
+        restaurant_results=restaurants or "none available",
+        activity_results=activities or "none available",
+        num_options=req.num_options,
+    )
+    try:
+        data = await llm.complete_json(ALFRED_PERSONA, prompt)
+    except LLMError as exc:
+        logger.error("Plan-date options completion failed: %s", exc)
+        return PlanDateResponse(
+            reply="I couldn't put together date ideas just now — mind trying again in a moment?",
+            confidence=0.3,
+        )
+
+    options = [PlanOption(**o) for o in data.get("options", []) if o.get("name")]
+    return PlanDateResponse(
+        reply=data.get("reply", ""),
+        options=options,
         confidence=float(data.get("confidence", 0.6)),
     )
 
@@ -500,6 +578,7 @@ async def handle_gift(
         location=location,
         search_results=raw_results or "none available",
         history=_history_text(history or []),
+        details_instruction=DETAILS_INSTRUCTION,
     )
     try:
         data = await llm.complete_json(ALFRED_PERSONA, prompt)
@@ -582,6 +661,7 @@ async def handle_travel(req: TravelRequest, llm: BaseLLMClient, search: SerpAPIC
         flight_results=flights or "none available",
         hotel_results=hotels or "none available",
         activity_results=activities or "none available",
+        details_instruction=DETAILS_INSTRUCTION,
     )
     try:
         data = await llm.complete_json(ALFRED_PERSONA, prompt)

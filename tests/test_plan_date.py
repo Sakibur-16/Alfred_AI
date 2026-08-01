@@ -29,3 +29,51 @@ def test_plan_date_returns_full_timeline(client, auth_headers, fake_llm, fake_se
     assert len(body["timeline"]) == 2
     assert body["restaurant"]["name"] == "Trattoria Roma"
     assert body["estimated_cost"] == 95
+    assert body["options"] == []
+
+
+def test_plan_date_recommendation_carries_image_url_and_details(client, auth_headers, fake_llm, fake_search):
+    fake_search._places = [{"name": "Trattoria Roma", "rating": 4.6, "image_url": "https://example.com/roma.jpg"}]
+    fake_llm.queue({
+        "reply": "Here's a lovely evening plan.",
+        "timeline": [{"time": "6:00 PM", "activity": "Dinner", "location": "Trattoria Roma"}],
+        "restaurant": {
+            "name": "Trattoria Roma", "category": "restaurant", "reason": "Cozy spot",
+            "image_url": "https://example.com/roma.jpg",
+            "details": [{"label": "Ambiance", "description": "Warm, dim lighting and quiet corners."}],
+        },
+        "activity": None,
+        "estimated_cost": 60,
+        "confidence": 0.85,
+    })
+
+    resp = client.post("/plan-date", json={"location": "Indianapolis"}, headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["restaurant"]["image_url"] == "https://example.com/roma.jpg"
+    assert body["restaurant"]["details"][0]["label"] == "Ambiance"
+
+
+def test_plan_date_returns_browsable_options_when_num_options_greater_than_one(client, auth_headers, fake_llm, fake_search):
+    fake_search._places = [{"name": "Trattoria Roma", "rating": 4.6}]
+    fake_llm.queue({
+        "reply": "Here are a few ideas to consider.",
+        "options": [
+            {"name": "Coffee & Nature Walk", "description": "A quiet morning stroll.", "estimated_cost": 30, "date_type": "relaxed"},
+            {"name": "Italian Dinner Experience", "description": "A five-course meal.", "estimated_cost": 140, "date_type": "dining"},
+            {"name": "Mountain Hiking Adventure", "description": "A scenic guided trek.", "estimated_cost": 110, "date_type": "adventurous"},
+        ],
+        "confidence": 0.8,
+    })
+
+    resp = client.post(
+        "/plan-date",
+        json={"location": "Indianapolis", "budget": 150, "num_options": 3},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["options"]) == 3
+    assert body["options"][0]["name"] == "Coffee & Nature Walk"
+    assert body["timeline"] == []
+    assert body["restaurant"] is None

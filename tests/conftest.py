@@ -57,11 +57,12 @@ class FakeLLMClient(BaseLLMClient):
 
 
 class FakeSearchClient(SerpAPIClient):
-    def __init__(self, places=None, flights=None, hotels=None, products=None):
+    def __init__(self, places=None, flights=None, hotels=None, products=None, events=None):
         self._places = places if places is not None else []
         self._flights = flights if flights is not None else []
         self._hotels = hotels if hotels is not None else []
         self._products = products if products is not None else []
+        self._events = events if events is not None else []
         self.product_queries: List[str] = []  # records each query search_products was called with
 
     async def search_places(self, query: str, location: str, currency=None):
@@ -76,6 +77,9 @@ class FakeSearchClient(SerpAPIClient):
     async def search_products(self, query: str, location=None):
         self.product_queries.append(query)
         return self._products
+
+    async def search_events(self, query: str, location: str, currency=None):
+        return self._events
 
 
 class FakeExchangeClient(ExchangeRateClient):

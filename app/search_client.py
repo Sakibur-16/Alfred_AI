@@ -94,6 +94,7 @@ class SerpAPIClient:
                 "price_level": item.get("price"),
                 "address": item.get("address"),
                 "url": item.get("links", {}).get("website") if isinstance(item.get("links"), dict) else item.get("link"),
+                "image_url": item.get("thumbnail"),
             })
         return results
 
@@ -127,6 +128,43 @@ class SerpAPIClient:
                 "price_level": item.get("price"),
                 "extracted_price_usd": item.get("extracted_price"),
                 "url": item.get("product_link") or item.get("link"),
+                "image_url": item.get("thumbnail"),
+            })
+        return results
+
+    async def search_events(self, query: str, location: str, currency: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Dated events (concerts, festivals, exhibitions, shows) via Google Events —
+        distinct from search_places (static venues, no date/time), matching a
+        dedicated "Events" tab in the UI rather than a relabeled activity search."""
+        if not self._enabled:
+            logger.warning("SERPAPI_KEY not set — skipping live event search for %r", query)
+            return []
+        try:
+            data = await self._get_locale_aware({
+                "engine": "google_events",
+                "q": f"{query} events in {location}" if location else f"{query} events",
+            }, currency)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("SerpAPI event search failed for %r: %s", query, exc)
+            raise SearchError(str(exc)) from exc
+
+        results = []
+        for item in data.get("events_results", [])[:10]:
+            venue = item.get("venue") or {}
+            date_info = item.get("date") or {}
+            when = date_info.get("when") or date_info.get("start_date")
+            address = ", ".join(item.get("address", [])) if isinstance(item.get("address"), list) else item.get("address")
+            thumbnail = item.get("thumbnail") or item.get("image")
+            results.append({
+                "name": item.get("title"),
+                "rating": venue.get("rating"),
+                # Google Events doesn't give a normalized price field — surface
+                # the date/time here since that's the defining detail for an
+                # event (vs. a static venue), not a price we don't actually have.
+                "price_level": when,
+                "address": address or venue.get("name"),
+                "url": item.get("link"),
+                "image_url": thumbnail,
             })
         return results
 
@@ -177,6 +215,8 @@ class SerpAPIClient:
         for item in data.get("properties", [])[:10]:
             rate = item.get("rate_per_night")
             lowest = rate.get("lowest") if isinstance(rate, dict) else None
+            images = item.get("images") or []
+            thumbnail = images[0].get("thumbnail") if images and isinstance(images[0], dict) else None
             results.append({
                 "name": item.get("name"),
                 "rating": item.get("overall_rating"),
@@ -185,6 +225,7 @@ class SerpAPIClient:
                 # not a locked/guaranteed rate.
                 "price_level": f"from {lowest}/night" if lowest else None,
                 "url": item.get("link"),
+                "image_url": thumbnail,
             })
         return results
 
