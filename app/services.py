@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from app.intent import DetectedIntent, detect_intent
 from app.llm_client import BaseLLMClient, LLMError
-from app.memory import sanitize_memory_updates
+from app.memory import safe_user_memory, sanitize_memory_updates
 from app.session_store import SessionStore
 from app.prompts import (
     AIRPORT_CODE_PROMPT,
@@ -45,6 +45,7 @@ from app.schemas import (
     RecommendCategory,
     RecommendRequest,
     RecommendResponse,
+    SessionStatus,
     TimelineStep,
     TravelRequest,
     TravelResponse,
@@ -112,7 +113,7 @@ def _merge_memory(base: UserMemory, override: Optional[UserMemory]) -> UserMemor
         return base
     merged = base.model_dump()
     merged.update(override_fields)
-    return UserMemory(**merged)
+    return safe_user_memory(merged)
 
 
 async def handle_chat(
@@ -133,6 +134,19 @@ async def handle_chat(
     stored = sessions.get(session_id) if (sessions and req.session_id) else None
     stored_slots = stored.slots if stored else {}
 
+    session_status: Optional[SessionStatus] = None
+    if sessions is not None:
+        if not req.session_id:
+            session_status = SessionStatus.new
+        elif stored is not None:
+            session_status = SessionStatus.active
+        else:
+            # A session_id was sent but nothing was found for it — either it
+            # expired (evicted after idle TTL) or was never valid. Either way,
+            # context was NOT carried over even though we're about to proceed
+            # under that same id — the caller needs to know this happened.
+            session_status = SessionStatus.expired
+
     memory = _merge_memory(stored.memory if stored else UserMemory(), req.memory)
     calendar = req.calendar or []
     # Caller-sent location wins; otherwise fall back to whatever city was
@@ -151,6 +165,15 @@ async def handle_chat(
     # what the intent classifier just extracted from this message.
     def _slot(field_name: str, req_value: Optional[str], detected_value: Optional[str]) -> Optional[str]:
         return req_value or stored_slots.get(field_name) or detected_value
+
+    # Search preferences must NEVER be the raw chat message — a real user
+    # message can be pure logistics/filler ("umm the budget is 5000 bdt") or a
+    # question back at Alfred ("why do you ask?"), and passing that verbatim
+    # into a SerpAPI query produces garbage queries that reliably fail. Use
+    # only the clean phrase the classifier distilled (or nothing at all).
+    preferences = _slot("search_preferences", None, detected.search_keywords)
+    if sessions and session_id and detected.search_keywords:
+        sessions.update_slots(session_id, {"search_preferences": detected.search_keywords})
 
     # Budget-aware intents shouldn't search until the budget question has been
     # answered from *somewhere* — a number (this request, session, user memory,
@@ -171,11 +194,11 @@ async def handle_chat(
         category = RecommendCategory.restaurant if intent == Intent.restaurant_search else RecommendCategory.activity
         sub_req = RecommendRequest(
             category=category, location=location.city, budget=budget, currency=req.currency,
-            memory=memory, preferences=req.message,
+            memory=memory, preferences=preferences,
         )
         rec = await handle_recommend(sub_req, llm, search, history=history)
         return _finalize_chat(
-            req, sessions, session_id, memory,
+            req, sessions, session_id, session_status, memory,
             reply=rec.reply, intent=intent, confidence=rec.confidence,
             recommendations=rec.recommendations,
         )
@@ -186,11 +209,11 @@ async def handle_chat(
         # is awkward, so this searches as soon as a city is known.
         sub_req = RecommendRequest(
             category=RecommendCategory.event, location=location.city, budget=budget, currency=req.currency,
-            memory=memory, preferences=req.message,
+            memory=memory, preferences=preferences,
         )
         rec = await handle_recommend(sub_req, llm, search, history=history)
         return _finalize_chat(
-            req, sessions, session_id, memory,
+            req, sessions, session_id, session_status, memory,
             reply=rec.reply, intent=intent, confidence=rec.confidence,
             recommendations=rec.recommendations,
         )
@@ -198,11 +221,11 @@ async def handle_chat(
     if intent == Intent.hotel_search and location.city and have_budget:
         sub_req = RecommendRequest(
             category=RecommendCategory.hotel, location=location.city, budget=budget, currency=req.currency,
-            memory=memory, preferences=req.message,
+            memory=memory, preferences=preferences,
         )
         rec = await handle_recommend(sub_req, llm, search, history=history)
         return _finalize_chat(
-            req, sessions, session_id, memory,
+            req, sessions, session_id, session_status, memory,
             reply=rec.reply, intent=intent, confidence=rec.confidence,
             recommendations=rec.recommendations,
         )
@@ -210,12 +233,12 @@ async def handle_chat(
     if intent == Intent.date_planning and location.city and have_budget:
         sub_req = PlanDateRequest(
             location=location.city, budget=budget, currency=req.currency,
-            memory=memory, calendar=calendar, preferences=req.message,
+            memory=memory, calendar=calendar, preferences=preferences,
         )
         plan = await handle_plan_date(sub_req, llm, search, history=history)
         recs = [r for r in (plan.restaurant, plan.activity) if r]
         return _finalize_chat(
-            req, sessions, session_id, memory,
+            req, sessions, session_id, session_status, memory,
             reply=plan.reply, intent=intent, confidence=plan.confidence,
             actions=plan.actions, recommendations=recs, memory_updates=plan.memory_updates,
             timeline=plan.timeline, estimated_cost=plan.estimated_cost,
@@ -224,11 +247,11 @@ async def handle_chat(
     if intent == Intent.gift_suggestions and have_budget:
         sub_req = GiftRequest(
             budget=budget, currency=req.currency, memory=memory, location=location.city,
-            preferences=req.message,
+            preferences=preferences,
         )
         gift = await handle_gift(sub_req, llm, search, exchange, history=history)
         return _finalize_chat(
-            req, sessions, session_id, memory,
+            req, sessions, session_id, session_status, memory,
             reply=gift.reply, intent=intent, confidence=gift.confidence,
             recommendations=gift.recommendations, memory_updates=gift.memory_updates,
         )
@@ -246,12 +269,12 @@ async def handle_chat(
         if origin and destination and start_date and end_date and have_budget:
             sub_req = TravelRequest(
                 origin=origin, destination=destination, start_date=start_date, end_date=end_date,
-                budget=budget, currency=req.currency, memory=memory, preferences=req.message,
+                budget=budget, currency=req.currency, memory=memory, preferences=preferences,
             )
             travel = await handle_travel(sub_req, llm, search)
             recs = travel.flights + travel.hotels + travel.activities
             return _finalize_chat(
-                req, sessions, session_id, memory,
+                req, sessions, session_id, session_status, memory,
                 reply=travel.reply, intent=intent, confidence=travel.confidence,
                 actions=travel.actions, recommendations=recs, estimated_cost=travel.estimated_cost,
             )
@@ -269,7 +292,7 @@ async def handle_chat(
         sub_req = CoachRequest(topic=topic, message=req.message, memory=memory, conversation_history=history)
         coach = await handle_coach(sub_req, llm)
         return _finalize_chat(
-            req, sessions, session_id, memory,
+            req, sessions, session_id, session_status, memory,
             reply=coach.reply, intent=intent, confidence=coach.confidence, tips=coach.tips,
         )
 
@@ -291,7 +314,7 @@ async def handle_chat(
     except LLMError as exc:
         logger.error("Chat completion failed: %s", exc)
         return _finalize_chat(
-            req, sessions, session_id, memory,
+            req, sessions, session_id, session_status, memory,
             reply="I'm having trouble thinking that through right now — could you try again in a moment?",
             intent=intent, confidence=0.3,
         )
@@ -300,7 +323,7 @@ async def handle_chat(
     memory_updates = sanitize_memory_updates(data.get("memory_updates", []))
 
     return _finalize_chat(
-        req, sessions, session_id, memory,
+        req, sessions, session_id, session_status, memory,
         reply=data.get("reply", ""),
         intent=intent,
         confidence=float(data.get("confidence", intent_confidence)),
@@ -310,7 +333,8 @@ async def handle_chat(
 
 
 def _finalize_chat(
-    req: ChatRequest, sessions: Optional[SessionStore], session_id: Optional[str], memory: UserMemory,
+    req: ChatRequest, sessions: Optional[SessionStore], session_id: Optional[str],
+    session_status: Optional[SessionStatus], memory: UserMemory,
     *, reply: str, intent: Intent, confidence: float,
     actions: Optional[List[ActionRequest]] = None,
     recommendations: Optional[List[Recommendation]] = None,
@@ -331,6 +355,7 @@ def _finalize_chat(
 
     return ChatResponse(
         session_id=session_id,
+        session_status=session_status,
         reply=reply,
         intent=intent,
         confidence=confidence,

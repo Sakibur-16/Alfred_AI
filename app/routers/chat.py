@@ -48,7 +48,14 @@ async def chat(
                 "conversation so Alfred recalls prior turns/memory server-side. Sessions live in this "
                 "service's memory only: they reset whenever the service restarts, and this example "
                 "value is a placeholder, not a real live session — copy the session_id from your own "
-                "first response instead of reusing this one.",
+                "first response instead of reusing this one.\n\n"
+                "Every response includes session_status so you can detect a lost session and show "
+                "your own UI message for it: \"new\" (no session_id was sent, one was generated), "
+                "\"active\" (the session_id you sent was found and its context was used), or "
+                "\"expired\" (you sent a session_id but nothing was found for it — either it was "
+                "evicted after ~2 hours idle, or it was never valid. A fresh, empty session was "
+                "silently started under that same id, so treat this as \"the conversation was lost, "
+                "starting over\" — e.g. show a toast — rather than assuming prior context carried over).",
                 "value": {
                     "message": "What about somewhere quieter instead?",
                     "session_id": "REPLACE_WITH_THE_session_id_FROM_YOUR_FIRST_RESPONSE",

@@ -118,6 +118,13 @@ guess or invent a value that was never actually stated; use null instead.
 - budget_no_limit: true if the user explicitly said budget doesn't matter / isn't a concern / \
   "any budget is fine" / similar — this counts as the budget question being answered even \
   though no number was given. false otherwise.
+- search_keywords: a short, clean phrase (a few words) capturing any real preference the user \
+  expressed about what they want — cuisine, ambiance, activity type, occasion (e.g. "quiet, \
+  outdoor seating" or "nightlife, fast food"). This gets used as a literal search query, so: \
+  NEVER just repeat the user's raw sentence, NEVER include budget amounts, dates, or logistics, \
+  and NEVER include a question or filler ("umm", "why do you ask", a bare answer like "$50" or \
+  "5000 bdt") — none of that is a search preference. If the message (and recent conversation) \
+  contains no real preference info, return null rather than forcing something out of it.
 
 Respond ONLY with this JSON shape:
 {{
@@ -130,7 +137,8 @@ Respond ONLY with this JSON shape:
   "travel_end_date": "<date as stated or null>",
   "budget_amount": <number or null>,
   "budget_no_limit": <true or false>,
-  "coach_topic": "<topic or null>"
+  "coach_topic": "<topic or null>",
+  "search_keywords": "<short clean phrase or null>"
 }}
 
 Message: "{message}"

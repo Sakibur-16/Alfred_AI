@@ -43,10 +43,12 @@ async def speak(req: SpeakRequest) -> Response:
 
 
 @router.get("/speak")
-async def speak_via_link(text: str) -> Response:
+async def speak_via_link(text: str, download: bool = False) -> Response:
     """Same as POST /speak, but as a plain link (?text=...) so the audio can be
     opened directly in a browser tab for manual listening — Swagger's response
-    viewer doesn't reliably play audio/mpeg bodies. Not meant for the real
-    client integration (long/sensitive text belongs in the POST body, not a
-    URL) — for manual spot-checks only."""
-    return await _speak(text)
+    viewer doesn't reliably play audio/mpeg bodies. Set download=true to download the MP3 file directly."""
+    resp = await _speak(text)
+    if download:
+        resp.headers["Content-Disposition"] = 'attachment; filename="speech.mp3"'
+    return resp
+

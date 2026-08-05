@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
+from app.memory import safe_user_memory
 from app.schemas import Location, MemoryUpdate, UserMemory
 
 MAX_TURNS = 20            # trim stored history to the last N turns
@@ -72,7 +73,7 @@ class SessionStore:
                 merged = state.memory.model_dump()
                 for u in updates:
                     merged[u.key] = u.value
-                state.memory = UserMemory(**merged)
+                state.memory = safe_user_memory(merged)
             state.updated_at = time.monotonic()
             return state.memory
 

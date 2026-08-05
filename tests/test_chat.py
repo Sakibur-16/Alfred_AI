@@ -1,3 +1,24 @@
+def test_chat_does_not_crash_when_ai_proposes_budget_memory_update_with_units(client, auth_headers, fake_llm):
+    # Reproduces a real production 500: the AI proposed memory_updates with
+    # budget as "5000 BDT" (units baked into the string) instead of a plain
+    # number, which crashed the whole request when saved to session memory.
+    fake_llm.queue({"intent": "general_chat", "confidence": 0.8})
+    fake_llm.queue({
+        "reply": "Understood, I've noted your budget.",
+        "confidence": 0.85,
+        "memory_updates": [{"key": "budget", "value": "5000 BDT"}],
+    })
+
+    resp = client.post(
+        "/chat",
+        json={"message": "umm the budget is 5000 bdt", "session_id": "sess-budget-crash"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["memory_updates"][0]["key"] == "budget"
+
+
 def test_chat_returns_structured_response(client, auth_headers, fake_llm):
     fake_llm.queue({"intent": "restaurant_search", "confidence": 0.85})
     fake_llm.queue({
@@ -110,7 +131,65 @@ def test_chat_without_session_id_gets_one_generated(client, auth_headers, fake_l
 
     resp = client.post("/chat", json={"message": "hello"}, headers=auth_headers)
     assert resp.status_code == 200
-    assert resp.json()["session_id"]
+    body = resp.json()
+    assert body["session_id"]
+    assert body["session_status"] == "new"
+
+
+def test_chat_session_status_is_active_when_session_id_is_found(client, auth_headers, fake_llm):
+    # Realistic flow: first call omits session_id (server mints one, status
+    # "new"); the caller then reuses that *server-returned* id on later calls,
+    # which should come back "active". (A caller-invented id that the server
+    # never issued is indistinguishable from an expired one — see the
+    # dedicated "expired" test below.)
+    fake_llm.queue({"intent": "small_talk", "confidence": 0.8})
+    fake_llm.queue({"reply": "Hey there!", "confidence": 0.9})
+    resp1 = client.post("/chat", json={"message": "hello"}, headers=auth_headers)
+    body1 = resp1.json()
+    assert body1["session_status"] == "new"
+    session_id = body1["session_id"]
+
+    fake_llm.queue({"intent": "small_talk", "confidence": 0.8})
+    fake_llm.queue({"reply": "Good to see you again!", "confidence": 0.9})
+    resp2 = client.post("/chat", json={"message": "hi again", "session_id": session_id}, headers=auth_headers)
+    assert resp2.status_code == 200
+    assert resp2.json()["session_status"] == "active"
+
+
+def test_chat_session_status_is_expired_for_unknown_session_id(client, auth_headers, fake_llm):
+    # A session_id that was never created (or was evicted after the idle TTL)
+    # must be flagged as "expired" so the caller knows context was NOT carried
+    # over, even though a response with that same session_id still comes back.
+    fake_llm.queue({"intent": "small_talk", "confidence": 0.8})
+    fake_llm.queue({"reply": "Hello there!", "confidence": 0.9})
+
+    resp = client.post(
+        "/chat",
+        json={"message": "continuing our chat", "session_id": "never-seen-before-id"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_id"] == "never-seen-before-id"
+    assert body["session_status"] == "expired"
+
+
+def test_chat_expired_session_starts_with_no_prior_context(client, auth_headers, fake_llm):
+    # Confirms an "expired" session_id doesn't silently smuggle in context from
+    # a different, coincidentally-similar prior call — it should behave exactly
+    # like a fresh conversation, not a partial/corrupted resume.
+    fake_llm.queue({"intent": "restaurant_search", "confidence": 0.8})
+    fake_llm.queue({"reply": "Which city would you like to search?", "confidence": 0.7})
+
+    resp = client.post(
+        "/chat",
+        json={"message": "find a restaurant", "session_id": "expired-session-xyz"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_status"] == "expired"
+    assert body["recommendations"] == []
 
 
 def test_chat_remembers_prior_turns_across_calls_via_session_id(client, auth_headers, fake_llm):
@@ -249,10 +328,13 @@ def test_chat_remembers_city_and_routes_to_recommend_on_bare_followup(client, au
 
 
 def test_chat_gift_query_changes_across_turns_via_session_message(client, auth_headers, fake_llm, fake_search):
-    # Reproduces the exact reported bug: same session, two gift follow-up
-    # messages ("suggestions?" then "something more meaningful?") must produce
-    # two different SerpAPI queries, not the same cached-looking result twice.
-    fake_llm.queue({"intent": "gift_suggestions", "confidence": 0.9, "budget_amount": 50})
+    # Reproduces the original reported bug (two gift follow-ups must produce
+    # different SerpAPI queries, not an identical cached-looking result twice)
+    # WITHOUT reintroducing the raw-message-as-query bug found later: the
+    # query must come from the classifier's distilled search_keywords, never
+    # req.message verbatim, since a raw message can contain filler/logistics
+    # text that breaks the search query outright.
+    fake_llm.queue({"intent": "gift_suggestions", "confidence": 0.9, "budget_amount": 50, "search_keywords": None})
     fake_llm.queue({"reply": "Here are some ideas.", "recommendations": [], "confidence": 0.8})
     client.post(
         "/chat",
@@ -260,7 +342,7 @@ def test_chat_gift_query_changes_across_turns_via_session_message(client, auth_h
         headers=auth_headers,
     )
 
-    fake_llm.queue({"intent": "gift_suggestions", "confidence": 0.9})
+    fake_llm.queue({"intent": "gift_suggestions", "confidence": 0.9, "search_keywords": "sentimental, meaningful keepsake"})
     fake_llm.queue({"reply": "Here's something more meaningful.", "recommendations": [], "confidence": 0.8})
     client.post(
         "/chat",
@@ -270,7 +352,9 @@ def test_chat_gift_query_changes_across_turns_via_session_message(client, auth_h
 
     assert len(fake_search.product_queries) == 2
     assert fake_search.product_queries[0] != fake_search.product_queries[1]
-    assert "something more meaningful" in fake_search.product_queries[1]
+    assert "sentimental, meaningful keepsake" in fake_search.product_queries[1]
+    # The raw, punctuation-laden user message must never leak into the query.
+    assert "something more meaningful?" not in fake_search.product_queries[1]
 
 
 def test_chat_treats_explicit_no_budget_limit_as_answered(client, auth_headers, fake_llm, fake_search):

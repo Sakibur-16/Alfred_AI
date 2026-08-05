@@ -55,6 +55,29 @@ def _normalize_currency(value: Optional[str]) -> str:
 
 Currency = Annotated[str, BeforeValidator(_normalize_currency)]
 
+_NUMBER_RE = re.compile(r"[\d,]+\.?\d*")
+
+
+def _normalize_budget(value: Optional[Any]) -> Optional[float]:
+    """The AI sometimes proposes a memory_update budget as free text with the
+    currency baked in (e.g. "5000 BDT" instead of 5000) — extract the numeric
+    part rather than rejecting it outright, since a strict float field crashing
+    the whole request over this is worse than just parsing what's usable."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = _NUMBER_RE.search(str(value))
+    if not match:
+        return None
+    try:
+        return float(match.group(0).replace(",", ""))
+    except ValueError:
+        return None
+
+
+Budget = Annotated[Optional[float], BeforeValidator(_normalize_budget)]
+
 
 class Intent(str, Enum):
     general_chat = "general_chat"
@@ -84,7 +107,7 @@ class UserMemory(BaseModel):
     """Mirrors the example memory object in the brief. Extra fields are allowed
     since the backend may evolve this shape independently of the AI layer."""
     name: Optional[str] = None
-    budget: Optional[float] = None
+    budget: Budget = None
     favorite_food: Optional[str] = None
     favorite_activity: Optional[str] = None
     relationship_status: Optional[str] = None
@@ -184,6 +207,17 @@ class ChatRequest(BaseModel):
     end_date: Optional[str] = None
 
 
+class SessionStatus(str, Enum):
+    new = "new"          # no session_id was sent; a fresh one was generated
+    active = "active"    # session_id was sent and its prior context was found/used
+    expired = "expired"  # session_id was sent but not found (evicted after idle
+                          # TTL, or simply invalid) — a fresh, empty session was
+                          # silently started under that same id. The caller should
+                          # treat this like a lost conversation (e.g. show a
+                          # "conversation reset" notice) rather than assume
+                          # continuity actually happened.
+
+
 class ChatResponse(StructuredAIResponse):
     """Chat is the master endpoint: when a message has enough structured detail
     (e.g. a known location), it internally calls the relevant specialist flow
@@ -193,8 +227,11 @@ class ChatResponse(StructuredAIResponse):
     When session_id is used, Alfred remembers prior turns/memory server-side —
     the backend doesn't have to resend full history every call. session_id is
     always echoed back (generated if the caller didn't send one) so the caller
-    can persist it for the next turn."""
+    can persist it for the next turn. Check session_status to detect when a
+    sent session_id wasn't found (expired/invalid) so context was NOT actually
+    carried over, even though a session_id is still returned."""
     session_id: Optional[str] = None
+    session_status: Optional[SessionStatus] = None
     timeline: List[TimelineStep] = Field(default_factory=list)
     estimated_cost: Optional[float] = None
     tips: List[str] = Field(default_factory=list)

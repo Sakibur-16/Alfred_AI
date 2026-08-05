@@ -25,6 +25,7 @@ class DetectedIntent:
     coach_topic: Optional[str] = None
     budget_amount: Optional[float] = None
     budget_no_limit: bool = False
+    search_keywords: Optional[str] = None
 
 
 def _format_history(history: List[Dict[str, str]]) -> str:
@@ -71,4 +72,5 @@ async def detect_intent(llm: BaseLLMClient, message: str, history: List[Dict[str
         coach_topic=coach_topic,
         budget_amount=budget_amount,
         budget_no_limit=bool(data.get("budget_no_limit")),
+        search_keywords=data.get("search_keywords") or None,
     )
