@@ -263,10 +263,16 @@ Personalize with memory where natural.
 
 {details_instruction}
 
+For each timeline step, set "venue" to "restaurant" if that step IS the restaurant pick \
+(e.g. a dinner/meal step at that venue), "activity" if that step IS the activity pick, or \
+null for any other step (e.g. a generic "Dessert" or "head home" step with no matching venue \
+from search results). This lets each step carry its matching venue's full details (photo, \
+price, rating) — do not guess a venue for a step that isn't really the restaurant or activity.
+
 Respond ONLY with this JSON shape:
 {{
   "reply": "<one short intro sentence>",
-  "timeline": [{{"time": "", "activity": "", "location": "", "notes": ""}}],
+  "timeline": [{{"time": "", "activity": "", "location": "", "notes": "", "venue": "restaurant" | "activity" | null}}],
   "restaurant": {{"name": "", "category": "restaurant", "rating": null, "price_level": "", "address": "", "url": "", \
 "image_url": null, "reason": "", "details": [{{"label": "", "description": ""}}]}},
   "activity": {{"name": "", "category": "activity", "rating": null, "price_level": "", "address": "", "url": "", \

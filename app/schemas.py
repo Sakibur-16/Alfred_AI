@@ -162,6 +162,12 @@ class TimelineStep(BaseModel):
     activity: str
     location: Optional[str] = None
     notes: Optional[str] = None
+    # The full recommendation (image, price, rating, atmosphere details) for
+    # this step's venue, when one applies — e.g. the "Meet At Coffee Shop"
+    # step carries the restaurant's photo/price directly on itself, so the
+    # timeline array alone is self-sufficient to render without needing to
+    # separately look at PlanDateResponse.restaurant/activity.
+    recommendation: Optional[Recommendation] = None
 
 
 class PlanOption(BaseModel):

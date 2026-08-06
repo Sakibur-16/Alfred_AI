@@ -32,6 +32,42 @@ def test_plan_date_returns_full_timeline(client, auth_headers, fake_llm, fake_se
     assert body["options"] == []
 
 
+def test_plan_date_embeds_recommendation_into_matching_timeline_step(client, auth_headers, fake_llm, fake_search):
+    # The frontend should be able to render the whole plan by looping over
+    # `timeline` alone — each step that IS the restaurant/activity pick should
+    # carry that recommendation's full details (image, price, rating) inline,
+    # rather than requiring a separate cross-reference against restaurant/activity.
+    fake_search._places = [{"name": "Trattoria Roma", "rating": 4.6, "image_url": "https://example.com/roma.jpg"}]
+    fake_llm.queue({
+        "reply": "Here's a lovely evening plan.",
+        "timeline": [
+            {"time": "6:00 PM", "activity": "Dinner", "location": "Trattoria Roma", "notes": "Window table", "venue": "restaurant"},
+            {"time": "8:00 PM", "activity": "Movie", "location": "Downtown Cinema", "notes": "", "venue": "activity"},
+            {"time": "9:30 PM", "activity": "Head home", "location": None, "notes": "", "venue": None},
+        ],
+        "restaurant": {
+            "name": "Trattoria Roma", "category": "restaurant", "rating": 4.6,
+            "image_url": "https://example.com/roma.jpg", "reason": "Cozy spot",
+        },
+        "activity": {"name": "Downtown Cinema", "category": "activity", "reason": "Matches favorite activity"},
+        "estimated_cost": 95,
+        "confidence": 0.88,
+    })
+
+    resp = client.post("/plan-date", json={"location": "Indianapolis", "budget": 100}, headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    dinner_step = body["timeline"][0]
+    movie_step = body["timeline"][1]
+    home_step = body["timeline"][2]
+
+    assert dinner_step["recommendation"]["name"] == "Trattoria Roma"
+    assert dinner_step["recommendation"]["image_url"] == "https://example.com/roma.jpg"
+    assert movie_step["recommendation"]["name"] == "Downtown Cinema"
+    assert home_step["recommendation"] is None
+
+
 def test_plan_date_recommendation_carries_image_url_and_details(client, auth_headers, fake_llm, fake_search):
     fake_search._places = [{"name": "Trattoria Roma", "rating": 4.6, "image_url": "https://example.com/roma.jpg"}]
     fake_llm.queue({

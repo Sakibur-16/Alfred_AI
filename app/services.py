@@ -473,9 +473,20 @@ async def handle_plan_date(
             confidence=0.3,
         )
 
-    timeline = [TimelineStep(**t) for t in data.get("timeline", [])]
     restaurant = Recommendation(**data["restaurant"]) if data.get("restaurant") and data["restaurant"].get("name") else None
     activity = Recommendation(**data["activity"]) if data.get("activity") and data["activity"].get("name") else None
+
+    timeline = []
+    for t in data.get("timeline", []):
+        step_fields = dict(t)
+        venue_tag = step_fields.pop("venue", None)
+        step = TimelineStep(**step_fields)
+        if venue_tag == "restaurant":
+            step.recommendation = restaurant
+        elif venue_tag == "activity":
+            step.recommendation = activity
+        timeline.append(step)
+
     actions = [ActionRequest(**a) for a in data.get("actions", []) if a.get("action")]
     memory_updates = sanitize_memory_updates(data.get("memory_updates", []))
 
