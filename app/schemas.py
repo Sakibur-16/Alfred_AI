@@ -171,13 +171,17 @@ class TimelineStep(BaseModel):
 
 
 class PlanOption(BaseModel):
-    """One browsable date-idea card (Figma: 'Recommended Date Ideas' list) —
-    a lightweight summary shown before the user picks one to see full details."""
+    """One browsable date-idea card (Figma: 'Recommended Date Ideas' list).
+    Carries its own full step-by-step timeline so the client can render a
+    complete plan (e.g. tapping "View Plan") without a second API call to
+    fetch details for whichever option the user picks."""
     name: str
     description: Optional[str] = None
     image_url: Optional[str] = None
     estimated_cost: Optional[float] = None
     date_type: Optional[str] = None
+    timeline: List[TimelineStep] = Field(default_factory=list)
+    travel_notes: Optional[str] = None
 
 
 class StructuredAIResponse(BaseModel):

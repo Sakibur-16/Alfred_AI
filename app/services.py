@@ -503,15 +503,33 @@ async def handle_plan_date(
     )
 
 
+def _parse_option_timeline(raw_timeline: List[Dict[str, Any]]) -> List[TimelineStep]:
+    """Parses one date-option's timeline steps. Unlike the single-plan path
+    (one restaurant + one activity shared by the whole plan, looked up by a
+    "venue" tag), different options can use different or overlapping venues —
+    so each step's recommendation is embedded inline via "venue_details"
+    rather than looked up from a single top-level pair."""
+    steps = []
+    for t in raw_timeline:
+        step_fields = dict(t)
+        step_fields.pop("venue", None)
+        venue_details = step_fields.pop("venue_details", None)
+        step = TimelineStep(**step_fields)
+        if venue_details and venue_details.get("name"):
+            step.recommendation = Recommendation(**venue_details)
+        steps.append(step)
+    return steps
+
+
 async def _handle_plan_date_options(
     req: PlanDateRequest, llm: BaseLLMClient,
     restaurants: List[Dict[str, Any]], activities: List[Dict[str, Any]],
     history: Optional[List[Dict[str, str]]],
 ) -> PlanDateResponse:
     """Figma's 'Recommended Date Ideas' browsing list: several distinct,
-    lightweight date concepts instead of one fully-built plan. The caller picks
-    one and re-calls with num_options=1 (+ the chosen concept as date_type or
-    preferences) to get its full timeline via the normal single-plan path."""
+    COMPLETE date plans (each with its own full timeline) so the caller can
+    render either the browsing cards or a picked option's full plan straight
+    from this one response, with no second API call needed."""
     prompt = PLAN_DATE_OPTIONS_PROMPT.format(
         persona=ALFRED_PERSONA,
         memory_block=format_memory_block(req.memory),
@@ -523,9 +541,16 @@ async def _handle_plan_date_options(
         restaurant_results=restaurants or "none available",
         activity_results=activities or "none available",
         num_options=req.num_options,
+        details_instruction=DETAILS_INSTRUCTION,
     )
     try:
-        data = await llm.complete_json(ALFRED_PERSONA, prompt)
+        # This is the single most token-hungry call in the service: several
+        # COMPLETE plans in one response, each with its own multi-step
+        # timeline and embedded venue details. The default budget (sized for
+        # a normal chat reply) truncates this mid-JSON well before it
+        # finishes, so scale the request up with the number of options asked
+        # for rather than reusing the shared default.
+        data = await llm.complete_json(ALFRED_PERSONA, prompt, max_tokens=min(8000, 1500 + req.num_options * 1500))
     except LLMError as exc:
         logger.error("Plan-date options completion failed: %s", exc)
         return PlanDateResponse(
@@ -533,7 +558,14 @@ async def _handle_plan_date_options(
             confidence=0.3,
         )
 
-    options = [PlanOption(**o) for o in data.get("options", []) if o.get("name")]
+    options = []
+    for o in data.get("options", []):
+        if not o.get("name"):
+            continue
+        option_fields = dict(o)
+        option_fields["timeline"] = _parse_option_timeline(option_fields.pop("timeline", []))
+        options.append(PlanOption(**option_fields))
+
     return PlanDateResponse(
         reply=data.get("reply", ""),
         options=options,

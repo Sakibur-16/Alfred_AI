@@ -45,12 +45,14 @@ class FakeLLMClient(BaseLLMClient):
         # responses is a queue consumed in order; simplest possible fake.
         self._queue: List[Dict[str, Any]] = list(responses or [])
         self.calls: List[str] = []
+        self.max_tokens_used: List[Optional[int]] = []  # records each call's max_tokens override (or None)
 
     def queue(self, response: Dict[str, Any]) -> None:
         self._queue.append(response)
 
-    async def complete(self, system_prompt: str, user_prompt: str) -> str:
+    async def complete(self, system_prompt: str, user_prompt: str, max_tokens: Optional[int] = None) -> str:
         self.calls.append(user_prompt)
+        self.max_tokens_used.append(max_tokens)
         if not self._queue:
             return json.dumps({"reply": "ok", "confidence": 0.9})
         return json.dumps(self._queue.pop(0))

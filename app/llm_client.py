@@ -23,12 +23,16 @@ class LLMError(Exception):
 
 class BaseLLMClient(ABC):
     @abstractmethod
-    async def complete(self, system_prompt: str, user_prompt: str) -> str:
-        """Return raw text completion from the model."""
+    async def complete(self, system_prompt: str, user_prompt: str, max_tokens: Optional[int] = None) -> str:
+        """Return raw text completion from the model. max_tokens overrides the
+        configured default for this call only — some prompts (e.g. multiple
+        full date plans in one response) need much more room than a typical
+        chat reply, and forcing every call to the same budget either wastes
+        it on small replies or truncates the large ones mid-JSON."""
 
-    async def complete_json(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
+    async def complete_json(self, system_prompt: str, user_prompt: str, max_tokens: Optional[int] = None) -> Dict[str, Any]:
         """Call the model and parse its output as JSON, tolerating stray markdown fences."""
-        raw = await self.complete(system_prompt, user_prompt)
+        raw = await self.complete(system_prompt, user_prompt, max_tokens=max_tokens)
         cleaned = raw.strip()
         if cleaned.startswith("```"):
             cleaned = cleaned.strip("`")
@@ -54,11 +58,11 @@ class AnthropicClient(BaseLLMClient):
         self._temperature = settings.llm_temperature
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
-    async def complete(self, system_prompt: str, user_prompt: str) -> str:
+    async def complete(self, system_prompt: str, user_prompt: str, max_tokens: Optional[int] = None) -> str:
         try:
             response = await self._client.messages.create(
                 model=self._model,
-                max_tokens=self._max_tokens,
+                max_tokens=max_tokens or self._max_tokens,
                 temperature=self._temperature,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
@@ -82,11 +86,11 @@ class OpenAIClient(BaseLLMClient):
         self._temperature = settings.llm_temperature
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
-    async def complete(self, system_prompt: str, user_prompt: str) -> str:
+    async def complete(self, system_prompt: str, user_prompt: str, max_tokens: Optional[int] = None) -> str:
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
-                max_tokens=self._max_tokens,
+                max_tokens=max_tokens or self._max_tokens,
                 temperature=self._temperature,
                 messages=[
                     {"role": "system", "content": system_prompt},

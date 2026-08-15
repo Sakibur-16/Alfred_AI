@@ -302,19 +302,39 @@ Restaurant options (from search, do not invent others):
 Activity options (from search, do not invent others):
 {activity_results}
 
-Propose {num_options} DIFFERENT date ideas as a browsable list (not one built-out plan) — \
-each a distinct concept (e.g. one relaxed/outdoorsy, one dining-focused, one adventurous), \
-so the user can pick which to develop further. Each idea's "name" should be a short concept \
-title (e.g. "Coffee & Nature Walk"), not a venue name. Ground each in the real search \
-results provided — do not invent specific venues, but you may describe an idea in general \
-terms (e.g. "a scenic walk followed by coffee") even without a specific matching venue.
+Propose {num_options} DIFFERENT, COMPLETE date plans — each a distinct concept (e.g. one \
+relaxed/outdoorsy, one dining-focused, one adventurous) so the user can browse and pick one. \
+Each plan's "name" should be a short concept title (e.g. "Coffee & Nature Walk"), not a venue \
+name. Ground each in the real search results provided — do not invent specific venues, but \
+you may describe a step in general terms (e.g. "a scenic walk") even without a matching venue.
+
+Each option must include its OWN short timeline (3-6 steps with rough times), the same way a \
+single date plan would — e.g. an option isn't just "Fine Dining Experience", it's "5:00 PM \
+meet at X, 6:00 PM dinner at Y, 7:30 PM dessert at Z". Reuse venues across options where it \
+makes sense (the same restaurant can anchor more than one option's dinner step). Give each \
+option a real "estimated_cost" grounded in the search results' prices whenever budget or \
+pricing info is available — don't leave it null unless truly nothing supports an estimate.
+
+{details_instruction}
+
+For each step within an option's timeline, set "venue" to "restaurant" or "activity" if that \
+step corresponds to one of the specific restaurant/activity search results listed above (do \
+not invent a venue match), or null for a generic step with no matching search result.
 
 Respond ONLY with this JSON shape:
 {{
   "reply": "<one short intro sentence>",
   "options": [
-    {{"name": "<short concept title>", "description": "<one sentence>", "image_url": null, \
-"estimated_cost": <number or null>, "date_type": "<e.g. relaxed, dining, adventurous>"}}
+    {{
+      "name": "<short concept title>", "description": "<one sentence>", "image_url": null,
+      "estimated_cost": <number or null>, "date_type": "<e.g. relaxed, dining, adventurous>",
+      "travel_notes": "<brief note or null>",
+      "timeline": [
+        {{"time": "", "activity": "", "location": "", "notes": "", "venue": "restaurant" | "activity" | null, \
+"venue_details": {{"name": "", "category": "", "rating": null, "price_level": "", "address": "", "url": "", \
+"image_url": null, "reason": "", "details": [{{"label": "", "description": ""}}]}} | null}}
+      ]
+    }}
   ],
   "confidence": <0.0-1.0>
 }}

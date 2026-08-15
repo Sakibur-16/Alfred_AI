@@ -113,3 +113,68 @@ def test_plan_date_returns_browsable_options_when_num_options_greater_than_one(c
     assert body["options"][0]["name"] == "Coffee & Nature Walk"
     assert body["timeline"] == []
     assert body["restaurant"] is None
+
+    # Reproduces a real production bug: this response (several complete plans
+    # in one call) was truncated mid-JSON under the default token budget sized
+    # for a normal chat reply. Confirm a scaled-up budget is actually requested.
+    assert fake_llm.max_tokens_used[-1] == min(8000, 1500 + 3 * 1500)
+
+
+def test_plan_date_options_each_carry_a_full_embedded_timeline(client, auth_headers, fake_llm, fake_search):
+    # Each browsable option must include its own complete step-by-step plan
+    # (with venue details embedded per step) so the client can render a full
+    # itinerary for whichever option the user picks, with no second API call.
+    fake_search._places = [{"name": "Trattoria Roma", "rating": 4.6}]
+    fake_llm.queue({
+        "reply": "Here are a few complete ideas to consider.",
+        "options": [
+            {
+                "name": "Italian Dinner Experience",
+                "description": "A five-course meal.",
+                "estimated_cost": 140,
+                "date_type": "dining",
+                "travel_notes": "Easy walk from the metro stop.",
+                "timeline": [
+                    {
+                        "time": "6:00 PM", "activity": "Dinner", "location": "Trattoria Roma",
+                        "notes": "Window table", "venue": "restaurant",
+                        "venue_details": {
+                            "name": "Trattoria Roma", "category": "restaurant", "rating": 4.6,
+                            "image_url": "https://example.com/roma.jpg", "reason": "Cozy, romantic spot.",
+                        },
+                    },
+                    {"time": "8:00 PM", "activity": "Evening stroll", "location": None, "notes": "", "venue": None},
+                ],
+            },
+            {
+                "name": "Mountain Hiking Adventure",
+                "description": "A scenic guided trek.",
+                "estimated_cost": 110,
+                "date_type": "adventurous",
+                "timeline": [
+                    {"time": "9:00 AM", "activity": "Trailhead meetup", "location": "Park entrance", "notes": "", "venue": None},
+                ],
+            },
+        ],
+        "confidence": 0.8,
+    })
+
+    resp = client.post(
+        "/plan-date",
+        json={"location": "Indianapolis", "budget": 150, "num_options": 2},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["options"]) == 2
+
+    dining_option = body["options"][0]
+    assert len(dining_option["timeline"]) == 2
+    assert dining_option["timeline"][0]["recommendation"]["name"] == "Trattoria Roma"
+    assert dining_option["timeline"][0]["recommendation"]["image_url"] == "https://example.com/roma.jpg"
+    assert dining_option["timeline"][1]["recommendation"] is None
+    assert dining_option["travel_notes"] == "Easy walk from the metro stop."
+
+    hiking_option = body["options"][1]
+    assert len(hiking_option["timeline"]) == 1
+    assert hiking_option["timeline"][0]["activity"] == "Trailhead meetup"
