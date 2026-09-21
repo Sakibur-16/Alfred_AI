@@ -128,7 +128,7 @@ def client(monkeypatch, fake_llm, fake_search, fake_exchange):
     monkeypatch.setattr(exchange_module, "get_exchange_client", lambda: fake_exchange)
     # Routers imported get_llm_client/get_search_client/get_exchange_client by
     # reference at import time, so patch each router module's bound name too.
-    for mod in (main_module.chat, main_module.recommend, main_module.plan_date, main_module.coach, main_module.gift, main_module.travel):
+    for mod in (main_module.chat, main_module.recommend, main_module.plan_date, main_module.coach, main_module.gift, main_module.travel, main_module.budget):
         if hasattr(mod, "get_llm_client"):
             monkeypatch.setattr(mod, "get_llm_client", lambda: fake_llm)
         if hasattr(mod, "get_search_client"):

@@ -387,6 +387,78 @@ class SpeakRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# POST /budget/analyze
+# ---------------------------------------------------------------------------
+
+class ExpenseItem(BaseModel):
+    category: str
+    amount: float
+    date: Optional[str] = None
+    merchant: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class SpendingBreakdownItem(BaseModel):
+    category: str
+    total_amount: float
+    percentage: float
+    expense_count: int = 1
+
+
+class ReceiptSummary(BaseModel):
+    total_expense: float
+    currency: Currency = "USD"
+    item_count: int = 0
+    period_detected: Optional[str] = None
+    merchant_names: List[str] = Field(default_factory=list)
+    bank_name_detected: Optional[str] = None
+    date_range_detected: Optional[str] = None
+    deduplicated_count: int = 0
+
+
+class BudgetAllocationItem(BaseModel):
+    category: str
+    recommended_amount: float
+    notes: Optional[str] = None
+
+
+class NextMonthPlan(BaseModel):
+    estimated_total_budget: float
+    currency: Currency = "USD"
+    weekly_spending_target: Optional[float] = None
+    projected_savings: Optional[float] = None
+    suggested_allocations: List[BudgetAllocationItem] = Field(default_factory=list)
+    planner_tips: List[str] = Field(default_factory=list)
+
+
+class ExpenseAnalysisRequest(BaseModel):
+    user_id: Optional[str] = None
+    currency: Currency = "USD"
+    current_budget: Optional[float] = None
+    expenses_text: Optional[str] = None
+    previous_month_expenses: List[ExpenseItem] = Field(default_factory=list)
+    file_base64: Optional[str] = None
+    file_type: Optional[str] = None  # e.g. "image/jpeg", "image/png", "application/pdf"
+    notes: Optional[str] = None
+    memory: UserMemory = Field(default_factory=UserMemory)
+
+
+class ExpenseAnalysisResponse(BaseModel):
+    reply: str
+    receipt_summary: Optional[ReceiptSummary] = None
+    analyzed_expenses: List[ExpenseItem] = Field(default_factory=list)
+    spending_breakdown: List[SpendingBreakdownItem] = Field(default_factory=list)
+    major_expense_areas: List[str] = Field(default_factory=list)
+    spending_patterns: List[str] = Field(default_factory=list)
+    insights_and_recommendations: List[str] = Field(default_factory=list)
+    next_month_plan: Optional[NextMonthPlan] = None
+    follow_up_questions: List[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+    actions: List[ActionRequest] = Field(default_factory=list)
+    memory_updates: List[MemoryUpdate] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
 

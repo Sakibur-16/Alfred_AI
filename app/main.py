@@ -16,7 +16,7 @@ from app.config import get_settings
 from app.http_client import aclose_http_client
 from app.llm_client import LLMError
 from app.logging_config import configure_logging
-from app.routers import chat, coach, gift, health, plan_date, recommend, travel, voice
+from app.routers import budget, chat, coach, gift, health, plan_date, recommend, travel, voice
 from app.schemas import ErrorResponse
 from app.search_client import SearchError
 from app.voice_client import VoiceError
@@ -36,7 +36,7 @@ app = FastAPI(
     title=settings.app_name,
     description=(
         "Alfred's AI service layer: conversational concierge, date planning, "
-        "recommendations, coaching, gifts, and travel. /chat optionally holds "
+        "recommendations, coaching, gifts, travel, and AI budget analysis. /chat optionally holds "
         "short-lived, in-memory session state keyed by session_id; every other "
         "endpoint remains stateless and relies on the caller's own context."
     ),
@@ -60,6 +60,7 @@ app.include_router(coach.router)
 app.include_router(gift.router)
 app.include_router(travel.router)
 app.include_router(voice.router)
+app.include_router(budget.router)
 
 
 @app.exception_handler(LLMError)

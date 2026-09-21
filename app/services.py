@@ -18,6 +18,7 @@ from app.prompts import (
     CHAT_RESPONSE_PROMPT,
     COACH_PROMPT,
     DETAILS_INSTRUCTION,
+    EXPENSE_ANALYSIS_SYSTEM_PROMPT,
     GIFT_PROMPT,
     NO_SEARCH_RESULTS_PROMPT,
     PLAN_DATE_OPTIONS_PROMPT,
@@ -30,22 +31,30 @@ from app.prompts import (
 )
 from app.schemas import (
     ActionRequest,
+    BudgetAllocationItem,
     ChatRequest,
     ChatResponse,
     CoachRequest,
     CoachResponse,
     CoachTopic,
+    ExpenseAnalysisRequest,
+    ExpenseAnalysisResponse,
+    ExpenseItem,
     GiftRequest,
     GiftResponse,
     Intent,
+    MemoryUpdate,
+    NextMonthPlan,
     PlanDateRequest,
     PlanDateResponse,
     PlanOption,
+    ReceiptSummary,
     Recommendation,
     RecommendCategory,
     RecommendRequest,
     RecommendResponse,
     SessionStatus,
+    SpendingBreakdownItem,
     TimelineStep,
     TravelRequest,
     TravelResponse,
@@ -747,3 +756,103 @@ async def handle_travel(req: TravelRequest, llm: BaseLLMClient, search: SerpAPIC
         actions=actions,
         confidence=float(data.get("confidence", 0.6)),
     )
+
+
+async def handle_budget_analysis(req: ExpenseAnalysisRequest, llm: BaseLLMClient) -> ExpenseAnalysisResponse:
+    prev_expenses_str = "\n".join(
+        [
+            f"- {item.category}: {req.currency} {item.amount} at {item.merchant or 'N/A'} (Date: {item.date or 'N/A'}, Notes: {item.notes or 'N/A'})"
+            for item in req.previous_month_expenses
+        ]
+    ) if req.previous_month_expenses else "None provided in structured array"
+
+    prompt = EXPENSE_ANALYSIS_SYSTEM_PROMPT.format(
+        persona=ALFRED_PERSONA,
+        memory_block=format_memory_block(req.memory),
+        currency=req.currency,
+        current_budget=_budget_text(req.current_budget, req.currency),
+        notes=req.notes or "None",
+        expenses_text=req.expenses_text or "See attached document or structured array",
+        previous_month_expenses=prev_expenses_str,
+    )
+
+    try:
+        data = await llm.complete_multimodal_json(
+            ALFRED_PERSONA,
+            prompt,
+            file_base64=req.file_base64,
+            file_type=req.file_type,
+            max_tokens=8000,  # itemizes every transaction; long statements overflow small limits mid-JSON
+        )
+    except LLMError as exc:
+        logger.error("Budget analysis LLM error: %s", exc)
+        return ExpenseAnalysisResponse(
+            reply="I ran into an issue analyzing the expense data. Please ensure the document is clear and try again.",
+            confidence=0.0,
+        )
+
+    raw_expenses = [ExpenseItem(**e) for e in data.get("analyzed_expenses", []) if isinstance(e, dict)]
+    seen_signatures = set()
+    deduped_expenses: List[ExpenseItem] = []
+    deduped_count = 0
+
+    for exp in raw_expenses:
+        sig_date = str(exp.date or "").strip().lower()
+        sig_amt = round(float(exp.amount), 2)
+        sig_merch = str(exp.merchant or exp.notes or "").strip().lower()
+        sig = (sig_date, sig_amt, sig_merch)
+        if sig in seen_signatures:
+            deduped_count += 1
+            continue
+        seen_signatures.add(sig)
+        deduped_expenses.append(exp)
+
+    receipt_sum_raw = data.get("receipt_summary")
+    if isinstance(receipt_sum_raw, dict):
+        receipt_summary = ReceiptSummary(**{
+            **receipt_sum_raw,
+            "item_count": len(deduped_expenses) if deduped_expenses else receipt_sum_raw.get("item_count", 0),
+            "deduplicated_count": deduped_count,
+        })
+    else:
+        receipt_summary = ReceiptSummary(
+            total_expense=sum(e.amount for e in deduped_expenses) if deduped_expenses else 0.0,
+            currency=req.currency,
+            item_count=len(deduped_expenses),
+            deduplicated_count=deduped_count,
+        )
+
+    spending_breakdown = [SpendingBreakdownItem(**s) for s in data.get("spending_breakdown", []) if isinstance(s, dict)]
+
+    next_month_raw = data.get("next_month_plan")
+    next_month_plan = None
+    if isinstance(next_month_raw, dict):
+        allocs = [BudgetAllocationItem(**a) for a in next_month_raw.get("suggested_allocations", []) if isinstance(a, dict)]
+        next_month_plan = NextMonthPlan(
+            estimated_total_budget=float(next_month_raw.get("estimated_total_budget", req.current_budget or 0.0)),
+            currency=next_month_raw.get("currency", req.currency),
+            weekly_spending_target=next_month_raw.get("weekly_spending_target"),
+            projected_savings=next_month_raw.get("projected_savings"),
+            suggested_allocations=allocs,
+            planner_tips=[str(t) for t in next_month_raw.get("planner_tips", [])],
+        )
+
+    actions = [ActionRequest(**a) for a in data.get("actions", []) if isinstance(a, dict) and a.get("action")]
+    mem_updates = [MemoryUpdate(**m) for m in data.get("memory_updates", []) if isinstance(m, dict) and m.get("key")]
+    follow_up_questions = [str(q) for q in data.get("follow_up_questions", []) if q]
+
+    return ExpenseAnalysisResponse(
+        reply=str(data.get("reply", "Expense analysis completed.")),
+        receipt_summary=receipt_summary,
+        analyzed_expenses=deduped_expenses,
+        spending_breakdown=spending_breakdown,
+        major_expense_areas=[str(a) for a in data.get("major_expense_areas", [])],
+        spending_patterns=[str(p) for p in data.get("spending_patterns", [])],
+        insights_and_recommendations=[str(i) for i in data.get("insights_and_recommendations", [])],
+        next_month_plan=next_month_plan,
+        follow_up_questions=follow_up_questions,
+        confidence=float(data.get("confidence", 0.9)),
+        actions=actions,
+        memory_updates=mem_updates,
+    )
+

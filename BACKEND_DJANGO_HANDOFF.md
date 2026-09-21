@@ -57,6 +57,8 @@ This section is a fast scan for backend developers. Detailed endpoint explanatio
 | POST /coach | topic | message, memory, conversation_history |
 | POST /gift | None | occasion, budget, memory, location |
 | POST /travel | origin, destination, start_date, end_date | budget, memory, preferences |
+| POST /budget/analyze | None | currency, current_budget, expenses_text, previous_month_expenses, file_base64, file_type, notes, memory |
+| POST /budget/analyze/upload | file (UploadFile) | currency, current_budget, notes |
 
 ### Real Request/Response Examples (Copy-Paste)
 
@@ -622,6 +624,95 @@ Travel planning for flights, hotels, and activities.
     }
   ],
   "confidence": 0.81
+}
+~~~
+
+---
+
+## 4.8 POST /budget/analyze and POST /budget/analyze/upload
+### Purpose
+Analyzes receipt images, PDF documents, or itemized expense text. Calculates category cost breakdowns, identifies spending patterns & major expense areas, and generates an estimated next-month budget plan with suggested category allocations.
+
+### JSON Request Example (`POST /budget/analyze`)
+~~~json
+{
+  "currency": "USD",
+  "current_budget": 1000.0,
+  "previous_month_expenses": [
+    {"category": "Groceries", "amount": 320.50, "merchant": "Walmart", "date": "2026-08-05"},
+    {"category": "Utilities", "amount": 150.00, "merchant": "Electric Co", "date": "2026-08-10"},
+    {"category": "Dining Out", "amount": 210.00, "merchant": "Local Restaurants", "date": "2026-08-15"}
+  ],
+  "notes": "Goal is to save 15% next month"
+}
+~~~
+
+### Multipart Upload Request (`POST /budget/analyze/upload`)
+Header: `Content-Type: multipart/form-data`
+Form Fields:
+- `file`: (binary receipt image PNG/JPEG/WEBP or PDF file)
+- `currency`: "USD"
+- `current_budget`: 1000.0
+- `notes`: "Monthly grocery receipt"
+
+### Response Example
+~~~json
+{
+  "reply": "Here is your previous month's expense analysis and next month spending plan.",
+  "receipt_summary": {
+    "total_expense": 680.50,
+    "currency": "USD",
+    "item_count": 3,
+    "period_detected": "August 2026",
+    "merchant_names": ["Walmart", "Electric Co", "Local Restaurants"]
+  },
+  "analyzed_expenses": [
+    {"category": "Groceries", "amount": 320.50, "merchant": "Walmart", "date": "2026-08-05"},
+    {"category": "Utilities", "amount": 150.00, "merchant": "Electric Co", "date": "2026-08-10"},
+    {"category": "Dining Out", "amount": 210.00, "merchant": "Local Restaurants", "date": "2026-08-15"}
+  ],
+  "spending_breakdown": [
+    {"category": "Groceries", "total_amount": 320.50, "percentage": 47.1, "expense_count": 1},
+    {"category": "Dining Out", "total_amount": 210.00, "percentage": 30.9, "expense_count": 1},
+    {"category": "Utilities", "total_amount": 150.00, "percentage": 22.0, "expense_count": 1}
+  ],
+  "major_expense_areas": [
+    "Groceries (47.1% of spending)",
+    "Dining Out (30.9% of spending)"
+  ],
+  "spending_patterns": [
+    "High proportion of dining out expenditures"
+  ],
+  "insights_and_recommendations": [
+    "Meal planning on weekends can reduce dining out expenses by up to 25%"
+  ],
+  "next_month_plan": {
+    "estimated_total_budget": 580.00,
+    "currency": "USD",
+    "projected_savings": 100.50,
+    "suggested_allocations": [
+      {"category": "Groceries", "recommended_amount": 300.00, "notes": "Bulk purchasing"},
+      {"category": "Dining Out", "recommended_amount": 140.00, "notes": "Reduced eating out frequency"},
+      {"category": "Utilities", "recommended_amount": 140.00, "notes": "Standard monthly estimate"}
+    ],
+    "planner_tips": [
+      "Set weekly dining out cap at $35"
+    ]
+  },
+  "confidence": 0.94,
+  "actions": [
+    {
+      "action": "save_budget_plan",
+      "payload": {
+        "estimated_total_budget": 580.00,
+        "currency": "USD"
+      }
+    }
+  ],
+  "memory_updates": [
+    {"key": "last_analyzed_monthly_spending", "value": 680.50},
+    {"key": "recommended_next_month_budget", "value": 580.00}
+  ]
 }
 ~~~
 
